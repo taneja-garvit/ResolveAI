@@ -10,6 +10,8 @@ from app.tools.ticket_tool import create_ticket
 from app.tools.refund_tool import process_refund
 from app.tools.order_tool import get_order_status
 
+from fastapi.responses import StreamingResponse
+from langchain.chat_models import ChatOpenAI
 
 from app.services.ml_service import predict_confidence
 
@@ -47,3 +49,20 @@ def run_agent(query: str):
     )
 
     return agent.run(query)
+
+def stream_agent(query: str):
+    """
+    Stream response token by token
+    """
+
+    llm = ChatOpenAI(streaming=True, temperature=0)
+
+    def generate():
+        response = llm.stream(query)
+
+        for chunk in response:
+            # chunk.content contains token
+            if chunk.content:
+                yield chunk.content
+
+    return generate
