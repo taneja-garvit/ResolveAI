@@ -1,10 +1,15 @@
 import pickle
 import numpy as np
 
-# simple dummy confidence model
-def predict_confidence(similarity_score: float):
-    # fake logic (you can replace with real ML model later)
-    if similarity_score > 0.7:
-        return 0.9
-    return 0.4
+# load trained model once
+model = pickle.load(open("app/models/ml_model.pkl", "rb"))
 
+def predict_confidence(similarity_score: float, query_length: int):
+    """
+    Predict confidence using trained ML model
+    """
+    features = np.array([[similarity_score, query_length]])
+    prob = model.predict_proba(features)
+
+    # probability of class 1 (confident)
+    return float(prob[0][1])
