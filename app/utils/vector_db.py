@@ -1,5 +1,6 @@
-from langchain.vectorstores import FAISS
 import os
+
+from langchain_community.vectorstores import FAISS
 
 DB_PATH = "data/vectorstore"
 
@@ -19,4 +20,4 @@ def load_vectorstore():
     from app.utils.embeddings import get_embeddings
     embeddings = get_embeddings()
 
-    return FAISS.load_local(DB_PATH, embeddings)
+    return FAISS.load_local(DB_PATH, embeddings, allow_dangerous_deserialization=True)

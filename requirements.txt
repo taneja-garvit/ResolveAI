@@ -1,9 +1,14 @@
 fastapi
 uvicorn
 langchain
+langchain-community
+langchain-openai
+langchain-text-splitters
 openai
 faiss-cpu
 pypdf
 numpy
 scikit-learn
 python-multipart
+pytest
+httpx

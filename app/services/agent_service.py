@@ -1,8 +1,9 @@
-from typing import Generator
+import os
+from typing import Generator, List, Tuple
 
-from langchain.agents import initialize_agent, Tool
-from langchain.chat_models import ChatOpenAI
-from langchain.schema import HumanMessage
+from langchain.agents import create_agent
+from langchain.tools import tool
+from langchain_openai import ChatOpenAI
 
 from app.utils.vector_db import load_vectorstore
 from app.services.ml_service import predict_confidence
@@ -11,6 +12,7 @@ from app.tools.refund_tool import process_refund
 from app.tools.order_tool import get_order_status
 
 _VECTORSTORE = None
+DEFAULT_OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
 
 
 def get_vectorstore():
@@ -22,13 +24,30 @@ def get_vectorstore():
     return _VECTORSTORE
 
 
+def _distance_to_similarity(distance: float) -> float:
+    safe_distance = max(0.0, float(distance))
+    return 1.0 / (1.0 + safe_distance)
+
+
+def retrieve_ranked_documents(query: str, k: int = 3) -> List[Tuple[object, float]]:
+    vectorstore = get_vectorstore()
+
+    try:
+        matches = vectorstore.similarity_search_with_score(query, k=k)
+    except AttributeError:
+        docs = vectorstore.similarity_search(query, k=k)
+        return [(doc, 0.5) for doc in docs]
+
+    return [(doc, _distance_to_similarity(score)) for doc, score in matches]
+
+
 def rag_tool(query: str):
     try:
-        vectorstore = get_vectorstore()
+        ranked_docs = retrieve_ranked_documents(query, k=3)
     except FileNotFoundError:
         return "RAG database not found. Upload a document first at /upload-doc."
 
-    docs = vectorstore.similarity_search(query, k=3)
+    docs = [doc for doc, _ in ranked_docs]
     if not docs:
         return "I could not find relevant documents for that question."
 
@@ -37,8 +56,12 @@ def rag_tool(query: str):
         for i, doc in enumerate(docs)
     )
 
-    similarity_score = min(0.99, max(0.0, len(docs) / 3))
-    confidence = predict_confidence(similarity_score, len(query))
+    similarity_score = sum(score for _, score in ranked_docs) / len(ranked_docs)
+
+    try:
+        confidence = predict_confidence(similarity_score, len(query))
+    except FileNotFoundError as exc:
+        return str(exc)
 
     if confidence < 0.5:
         return f"Low confidence ({confidence:.2f}). Escalating to human support."
@@ -52,8 +75,8 @@ def rag_tool(query: str):
         "Answer:"
     )
 
-    llm = ChatOpenAI(temperature=0)
-    response = llm([HumanMessage(content=prompt)])
+    llm = ChatOpenAI(model=DEFAULT_OPENAI_MODEL, temperature=0)
+    response = llm.invoke(prompt)
     text = response.content.strip() if hasattr(response, "content") else str(response)
 
     return f"{text}\n\n(confidence: {confidence:.2f})"
@@ -61,29 +84,60 @@ def rag_tool(query: str):
 
 def build_tools():
     return [
-        Tool(name="RAG", func=rag_tool, description="Answer from documents"),
-        Tool(name="Ticket", func=create_ticket, description="Create support ticket"),
-        Tool(name="Refund", func=process_refund, description="Process refund"),
-        Tool(name="Order", func=get_order_status, description="Get order status"),
+        tool(
+            "rag_lookup",
+            description="Answer questions using uploaded company documents and support policies.",
+        )(rag_tool),
+        tool(
+            "create_support_ticket",
+            description="Create a support ticket for a customer issue.",
+        )(create_ticket),
+        tool(
+            "process_customer_refund",
+            description="Start a refund workflow for a customer order.",
+        )(process_refund),
+        tool(
+            "check_order_status",
+            description="Look up the current status of an order.",
+        )(get_order_status),
     ]
 
 
-def build_agent(streaming: bool = False):
-    llm = ChatOpenAI(streaming=streaming, temperature=0)
-    tools = build_tools()
-
-    return initialize_agent(
-        tools,
-        llm,
-        agent="zero-shot-react-description",
-        verbose=False,
+def build_agent():
+    llm = ChatOpenAI(model=DEFAULT_OPENAI_MODEL, temperature=0)
+    return create_agent(
+        model=llm,
+        tools=build_tools(),
+        system_prompt=(
+            "You are an AI customer support copilot. Use document retrieval for company policy questions "
+            "and call support tools when the user requests an action like a refund, order lookup, or ticket creation."
+        ),
+        debug=False,
     )
+
+
+def _extract_agent_text(result) -> str:
+    if isinstance(result, dict):
+        messages = result.get("messages", [])
+        if messages:
+            content = getattr(messages[-1], "content", messages[-1])
+            if isinstance(content, list):
+                return "".join(
+                    item.get("text", str(item))
+                    if isinstance(item, dict)
+                    else str(item)
+                    for item in content
+                ).strip()
+            return str(content).strip()
+
+    return str(result).strip()
 
 
 def run_agent(query: str):
     try:
-        agent = build_agent(streaming=False)
-        return agent.run(query)
+        agent = build_agent()
+        result = agent.invoke({"messages": [{"role": "user", "content": query}]})
+        return _extract_agent_text(result)
     except FileNotFoundError as exc:
         return str(exc)
     except Exception as exc:
@@ -91,14 +145,4 @@ def run_agent(query: str):
 
 
 def stream_agent(query: str) -> Generator[str, None, None]:
-    agent = build_agent(streaming=True)
-    try:
-        response = agent.run(query)
-    except FileNotFoundError as exc:
-        yield str(exc)
-        return
-    except Exception as exc:
-        yield f"Agent error: {exc}"
-        return
-
-    yield response
+    yield run_agent(query)

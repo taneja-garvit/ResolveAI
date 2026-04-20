@@ -12,5 +12,4 @@ def ask(query: str):
 
 @router.get("/stream-ask")
 def stream_ask(query: str):
-    generator = stream_agent(query)
-    return StreamingResponse(generator(), media_type="text/plain")
+    return StreamingResponse(stream_agent(query), media_type="text/plain")
