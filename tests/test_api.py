@@ -110,3 +110,29 @@ def test_rag_tool_uses_retrieval_scores_for_confidence(monkeypatch):
     assert captured["query_length"] == len("How long do refunds take?")
     assert 0.0 < captured["similarity_score"] < 1.0
     assert captured["similarity_score"] != (2 / 3)
+
+
+def test_refund_policy_query_routes_to_rag(monkeypatch):
+    monkeypatch.setattr(agent_service, "rag_tool", lambda query: "RAG response")
+
+    response = agent_service.run_agent("What is the refund policy in the uploaded handbook?")
+
+    assert response == "RAG response"
+
+
+def test_invalid_groq_key_returns_clear_error(monkeypatch):
+    monkeypatch.setenv("GROQ_API_KEY", "bad-key")
+    monkeypatch.setattr(agent_service, "get_vectorstore", lambda: type("V", (), {
+        "similarity_search_with_score": lambda self, q, k=3: [(type("D", (), {"page_content": "x"})(), 0.2)]
+    })())
+    monkeypatch.setattr(agent_service, "predict_confidence", lambda s, ql: 0.9)
+
+    class BadChatModel:
+        def invoke(self, prompt):
+            raise Exception("Error code: 401 - {'error': {'code': 'invalid_api_key'}}")
+
+    monkeypatch.setattr(agent_service, "_get_chat_model", lambda: BadChatModel())
+
+    response = agent_service.run_agent("Tell me from docs")
+
+    assert "Invalid GROQ_API_KEY" in response

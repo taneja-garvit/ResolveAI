@@ -1,4 +1,5 @@
 import os
+import re
 from typing import Generator, List, Tuple
 
 from langchain_openai import ChatOpenAI
@@ -45,6 +46,10 @@ def _get_chat_model() -> ChatOpenAI:
     if not groq_api_key:
         raise FileNotFoundError(
             "GROQ_API_KEY is missing. Add it to your environment or .env file."
+        )
+    if groq_api_key.strip() == "your_groq_api_key_here":
+        raise FileNotFoundError(
+            "GROQ_API_KEY is still a placeholder. Replace it with your real Groq API key."
         )
 
     return ChatOpenAI(
@@ -111,7 +116,12 @@ def _route_query(query: str) -> str:
     if "ticket" in lower_query or "complaint" in lower_query:
         return create_ticket(query)
 
-    if "refund" in lower_query:
+    refund_action_words = ("process", "initiate", "start", "issue", "create")
+    has_order_reference = bool(re.search(r"\b(order|ord|rm)\s*[-:]?\s*\w+\b", lower_query))
+    if "refund" in lower_query and (
+        any(word in lower_query for word in refund_action_words)
+        or has_order_reference
+    ):
         return process_refund(query)
 
     if (
@@ -131,6 +141,11 @@ def run_agent(query: str):
     except FileNotFoundError as exc:
         return str(exc)
     except Exception as exc:
+        if "invalid_api_key" in str(exc).lower():
+            return (
+                "Agent error: Invalid GROQ_API_KEY. "
+                "If you ran `copy .env.example .env`, replace placeholder values in `.env` and restart backend."
+            )
         return f"Agent error: {exc}"
 
 
