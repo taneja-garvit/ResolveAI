@@ -72,6 +72,7 @@ def test_upload_sanitizes_filename_and_processes_document(monkeypatch, tmp_path)
 
 def test_rag_tool_uses_retrieval_scores_for_confidence(monkeypatch):
     captured = {}
+    monkeypatch.setenv("GROQ_API_KEY", "test-key")
 
     class FakeDoc:
         def __init__(self, page_content):

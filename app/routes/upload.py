@@ -50,12 +50,19 @@ async def upload_doc(file: UploadFile = File(...)):
             f.write(contents)
 
         process_document(file_path)
+    except ValueError as exc:
+        if os.path.exists(file_path):
+            os.remove(file_path)
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     except HTTPException:
         raise
     except Exception as exc:
         if os.path.exists(file_path):
             os.remove(file_path)
-        raise HTTPException(status_code=500, detail="Document processing failed.") from exc
+        raise HTTPException(
+            status_code=500,
+            detail=f"Document processing failed: {exc}",
+        ) from exc
     finally:
         await file.close()
 

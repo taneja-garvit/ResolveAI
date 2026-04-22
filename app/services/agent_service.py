@@ -1,8 +1,6 @@
 import os
 from typing import Generator, List, Tuple
 
-from langchain.agents import create_agent
-from langchain.tools import tool
 from langchain_openai import ChatOpenAI
 
 from app.utils.vector_db import load_vectorstore
@@ -12,7 +10,8 @@ from app.tools.refund_tool import process_refund
 from app.tools.order_tool import get_order_status
 
 _VECTORSTORE = None
-DEFAULT_OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
+DEFAULT_GROQ_MODEL = os.getenv("GROQ_MODEL", "llama-3.1-8b-instant")
+DEFAULT_GROQ_BASE_URL = os.getenv("GROQ_BASE_URL", "https://api.groq.com/openai/v1")
 
 
 def get_vectorstore():
@@ -41,6 +40,21 @@ def retrieve_ranked_documents(query: str, k: int = 3) -> List[Tuple[object, floa
     return [(doc, _distance_to_similarity(score)) for doc, score in matches]
 
 
+def _get_chat_model() -> ChatOpenAI:
+    groq_api_key = os.getenv("GROQ_API_KEY")
+    if not groq_api_key:
+        raise FileNotFoundError(
+            "GROQ_API_KEY is missing. Add it to your environment or .env file."
+        )
+
+    return ChatOpenAI(
+        model=DEFAULT_GROQ_MODEL,
+        temperature=0,
+        api_key=groq_api_key,
+        base_url=DEFAULT_GROQ_BASE_URL,
+    )
+
+
 def rag_tool(query: str):
     try:
         ranked_docs = retrieve_ranked_documents(query, k=3)
@@ -56,15 +70,15 @@ def rag_tool(query: str):
         for i, doc in enumerate(docs)
     )
 
-    similarity_score = sum(score for _, score in ranked_docs) / len(ranked_docs)
+    avg_similarity = sum(score for _, score in ranked_docs) / len(ranked_docs)
+    top_similarity = max(score for _, score in ranked_docs)
+    similarity_score = (0.3 * avg_similarity) + (0.7 * top_similarity)
+    normalized_query_length = min(len(query), 120)
 
     try:
-        confidence = predict_confidence(similarity_score, len(query))
+        confidence = predict_confidence(similarity_score, normalized_query_length)
     except FileNotFoundError as exc:
         return str(exc)
-
-    if confidence < 0.5:
-        return f"Low confidence ({confidence:.2f}). Escalating to human support."
 
     prompt = (
         "You are a helpful assistant. Use the retrieved document passages to answer the user's question. "
@@ -75,69 +89,45 @@ def rag_tool(query: str):
         "Answer:"
     )
 
-    llm = ChatOpenAI(model=DEFAULT_OPENAI_MODEL, temperature=0)
+    llm = _get_chat_model()
     response = llm.invoke(prompt)
     text = response.content.strip() if hasattr(response, "content") else str(response)
+
+    if confidence < 0.35:
+        return (
+            f"Low confidence ({confidence:.2f}). Escalating to human support.\n\n"
+            f"Possible answer from retrieved docs: {text}"
+        )
+
+    if confidence < 0.55:
+        return f"Tentative answer ({confidence:.2f} confidence): {text}"
 
     return f"{text}\n\n(confidence: {confidence:.2f})"
 
 
-def build_tools():
-    return [
-        tool(
-            "rag_lookup",
-            description="Answer questions using uploaded company documents and support policies.",
-        )(rag_tool),
-        tool(
-            "create_support_ticket",
-            description="Create a support ticket for a customer issue.",
-        )(create_ticket),
-        tool(
-            "process_customer_refund",
-            description="Start a refund workflow for a customer order.",
-        )(process_refund),
-        tool(
-            "check_order_status",
-            description="Look up the current status of an order.",
-        )(get_order_status),
-    ]
+def _route_query(query: str) -> str:
+    lower_query = query.lower()
 
+    if "ticket" in lower_query or "complaint" in lower_query:
+        return create_ticket(query)
 
-def build_agent():
-    llm = ChatOpenAI(model=DEFAULT_OPENAI_MODEL, temperature=0)
-    return create_agent(
-        model=llm,
-        tools=build_tools(),
-        system_prompt=(
-            "You are an AI customer support copilot. Use document retrieval for company policy questions "
-            "and call support tools when the user requests an action like a refund, order lookup, or ticket creation."
-        ),
-        debug=False,
-    )
+    if "refund" in lower_query:
+        return process_refund(query)
 
+    if (
+        "order status" in lower_query
+        or "track order" in lower_query
+        or ("order" in lower_query and "status" in lower_query)
+        or "where is my order" in lower_query
+    ):
+        return get_order_status(query)
 
-def _extract_agent_text(result) -> str:
-    if isinstance(result, dict):
-        messages = result.get("messages", [])
-        if messages:
-            content = getattr(messages[-1], "content", messages[-1])
-            if isinstance(content, list):
-                return "".join(
-                    item.get("text", str(item))
-                    if isinstance(item, dict)
-                    else str(item)
-                    for item in content
-                ).strip()
-            return str(content).strip()
-
-    return str(result).strip()
+    return rag_tool(query)
 
 
 def run_agent(query: str):
     try:
-        agent = build_agent()
-        result = agent.invoke({"messages": [{"role": "user", "content": query}]})
-        return _extract_agent_text(result)
+        return _route_query(query)
     except FileNotFoundError as exc:
         return str(exc)
     except Exception as exc:

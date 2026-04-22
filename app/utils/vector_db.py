@@ -7,7 +7,18 @@ DB_PATH = "data/vectorstore"
 
 def save_vectorstore(docs, embeddings):
     os.makedirs(DB_PATH, exist_ok=True)
-    vectorstore = FAISS.from_documents(docs, embeddings)
+    index_path = os.path.join(DB_PATH, "index.faiss")
+
+    if os.path.exists(index_path):
+        vectorstore = FAISS.load_local(
+            DB_PATH,
+            embeddings,
+            allow_dangerous_deserialization=True,
+        )
+        vectorstore.add_documents(docs)
+    else:
+        vectorstore = FAISS.from_documents(docs, embeddings)
+
     vectorstore.save_local(DB_PATH)
 
 
