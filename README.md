@@ -137,12 +137,3 @@ Run frontend build validation:
 cd frontend
 npm run build
 ```
-
-## Resume Bullets
-
-- Built an AI customer support copilot using `FastAPI`, `LangChain`, and `FAISS` to answer questions over uploaded company documents with retrieval-augmented generation.
-- Added an agent-based workflow with tool calling for support operations and a `scikit-learn` logistic regression model to estimate confidence and trigger escalation for uncertain responses.
-
-## Interview Explanation
-
-"I wanted to build something more realistic than a basic chatbot, so I designed an AI customer support copilot with three layers. First, I used a RAG pipeline so answers could be grounded in uploaded company documents. Second, I added an agent layer that can choose between answering from documents or calling support tools like refund or ticket workflows. Third, I added a lightweight logistic regression confidence model that uses retrieval quality and query length to decide when the system should escalate instead of answering confidently. The current version is a prototype, so the support tools are mocked, but the architecture is intentionally designed to mirror a real support automation system."
